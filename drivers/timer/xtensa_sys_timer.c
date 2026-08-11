@@ -105,8 +105,8 @@ void sys_clock_set_timeout(uint32_t ticks, bool idle)
 	cyc = (cyc / CYC_PER_TICK) * CYC_PER_TICK;
 	cyc += last_count;
 
-	if ((cyc - curr) < MIN_DELAY) {
-		cyc += CYC_PER_TICK;
+	if ((int32_t)(cyc - curr) < (int32_t)MIN_DELAY) {
+		cyc = curr + MIN_DELAY;
 	}
 
 	set_ccompare(cyc - ccount_comp());
