@@ -17,7 +17,8 @@
 #define CYC_PER_TICK (sys_clock_hw_cycles_per_sec()	\
 		      / CONFIG_SYS_CLOCK_TICKS_PER_SEC)
 #define MAX_CYC 0xffffffffu
-#define MAX_TICKS ((MAX_CYC - CYC_PER_TICK) / CYC_PER_TICK)
+#define MAX_CYC_HORIZON (MAX_CYC / 2u)
+#define MAX_TICKS ((MAX_CYC_HORIZON - CYC_PER_TICK) / CYC_PER_TICK)
 #define MIN_DELAY 1000
 
 static unsigned int last_count;
@@ -55,6 +56,24 @@ static uint32_t ccount(void)
 	return val + ccount_comp();
 }
 
+static void set_ccompare_checked(uint32_t cyc)
+{
+	uint32_t margin = MIN_DELAY;
+
+	while (true) {
+		set_ccompare(cyc - ccount_comp());
+
+		if ((int32_t)(cyc - ccount()) > 0) {
+			return;
+		}
+
+		cyc = ccount() + margin;
+		if (margin < (MAX_CYC_HORIZON / 2u)) {
+			margin *= 2U;
+		}
+	}
+}
+
 static uint32_t sys_clock_elapsed_ticks(uint32_t curr)
 {
 	uint32_t dticks = (curr - last_count) / CYC_PER_TICK;
@@ -76,10 +95,10 @@ static void ccompare_isr(const void *arg)
 	if (!IS_ENABLED(CONFIG_TICKLESS_KERNEL)) {
 		uint32_t next = last_count + CYC_PER_TICK;
 
-		if ((int32_t)(next - curr) < MIN_DELAY) {
-			next += CYC_PER_TICK;
+		if ((int32_t)(next - curr) < (int32_t)MIN_DELAY) {
+			next = curr + MIN_DELAY;
 		}
-		set_ccompare(next - ccount_comp());
+		set_ccompare_checked(next);
 	}
 
 	sys_clock_announce_locked(IS_ENABLED(CONFIG_TICKLESS_KERNEL) ? dticks : 1, key);
@@ -92,24 +111,24 @@ void sys_clock_set_timeout(uint32_t ticks, bool idle)
 #if defined(CONFIG_TICKLESS_KERNEL)
 	ticks = CLAMP(ticks, 1, MAX_TICKS) - 1;
 
-	uint32_t curr = ccount(), cyc, adj;
+	uint32_t curr = ccount(), cyc;
+	uint64_t deadline;
+
+	deadline = (uint64_t)ticks * CYC_PER_TICK +
+		   (curr - last_count) + (CYC_PER_TICK - 1);
+	if (deadline > MAX_CYC_HORIZON) {
+		deadline = MAX_CYC_HORIZON;
+	}
 
 	/* Round up to next tick boundary */
-	cyc = ticks * CYC_PER_TICK;
-	adj = (curr - last_count) + (CYC_PER_TICK - 1);
-	if (cyc <= MAX_CYC - adj) {
-		cyc += adj;
-	} else {
-		cyc = MAX_CYC;
-	}
-	cyc = (cyc / CYC_PER_TICK) * CYC_PER_TICK;
+	cyc = ((uint32_t)deadline / CYC_PER_TICK) * CYC_PER_TICK;
 	cyc += last_count;
 
 	if ((int32_t)(cyc - curr) < (int32_t)MIN_DELAY) {
 		cyc = curr + MIN_DELAY;
 	}
 
-	set_ccompare(cyc - ccount_comp());
+	set_ccompare_checked(cyc);
 
 	if (IS_ENABLED(CONFIG_XTENSA_TIMER_LPM_TIMER_HOOK)) {
 		if (idle) {
@@ -146,7 +165,7 @@ uint32_t sys_clock_cycle_get_32(void)
 #ifdef CONFIG_SMP
 void smp_timer_init(void)
 {
-	set_ccompare(ccount() + CYC_PER_TICK);
+	set_ccompare_checked(ccount() + CYC_PER_TICK);
 	irq_enable(TIMER_IRQ);
 }
 #endif
@@ -188,7 +207,7 @@ void sys_clock_idle_exit(void)
 static int sys_clock_driver_init(void)
 {
 	IRQ_CONNECT(TIMER_IRQ, 0, ccompare_isr, 0, 0);
-	set_ccompare(ccount() + CYC_PER_TICK);
+	set_ccompare_checked(ccount() + CYC_PER_TICK);
 	irq_enable(TIMER_IRQ);
 	return 0;
 }
