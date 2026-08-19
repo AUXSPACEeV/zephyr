@@ -558,9 +558,28 @@ static inline void update_all_channels_hop(const struct zbus_observer *obs)
 
 #endif /* CONFIG_ZBUS_PRIORITY_BOOST */
 
+/* AURORA LOCAL DIAGNOSTIC: not upstream, revert before submitting anything.
+ */
+STRUCT_SECTION_START_EXTERN(zbus_channel);
+STRUCT_SECTION_END_EXTERN(zbus_channel);
+
+static inline void aurora_assert_chan_sane(const struct zbus_channel *chan, const char *where)
+{
+	ARG_UNUSED(where);
+
+	__ASSERT(chan >= STRUCT_SECTION_START(zbus_channel) &&
+			 chan < STRUCT_SECTION_END(zbus_channel),
+		 "%s: chan %p outside the channel list [%p, %p)", where, (void *)chan,
+		 (void *)STRUCT_SECTION_START(zbus_channel),
+		 (void *)STRUCT_SECTION_END(zbus_channel));
+	__ASSERT(chan->data != NULL, "%s: chan %p has NULL data", where, (void *)chan);
+}
+
 static inline int chan_lock(const struct zbus_channel *chan, k_timeout_t timeout, int *prio)
 {
 	bool boosting = false;
+
+	aurora_assert_chan_sane(chan, "chan_lock");
 
 #if defined(CONFIG_ZBUS_PRIORITY_BOOST)
 	if (!k_is_in_isr()) {
@@ -600,6 +619,9 @@ static inline int chan_lock(const struct zbus_channel *chan, k_timeout_t timeout
 
 static inline void chan_unlock(const struct zbus_channel *chan, int prio)
 {
+	/* AURORA LOCAL DIAGNOSTIC - see chan_lock(). */
+	aurora_assert_chan_sane(chan, "chan_unlock");
+
 	k_sem_give(&chan->data->sem);
 
 #if defined(CONFIG_ZBUS_PRIORITY_BOOST)
